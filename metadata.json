@@ -1,0 +1,5 @@
+{
+  "name": "VisionVoyage AI",
+  "description": "AI-powered travel planner that identifies landmarks from images and generates complete trip itineraries with maps and local events.",
+  "requestFramePermissions": ["geolocation"]
+}

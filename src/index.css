@@ -1,0 +1,42 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+@layer base {
+  .prose h1 { @apply text-4xl font-extrabold mb-6 mt-10 text-neutral-900 tracking-tight; }
+  .prose h2 { @apply text-2xl font-bold mb-4 mt-8 text-neutral-800; }
+  .prose h3 { @apply text-xl font-bold mb-3 mt-6 text-neutral-800; }
+  .prose p { @apply mb-5 leading-relaxed text-neutral-600; }
+  .prose ul { @apply list-disc pl-6 mb-6 space-y-2; }
+  .prose li { @apply text-neutral-600; }
+  .prose strong { @apply font-bold text-neutral-900; }
+  
+  body {
+    @apply bg-[#fafafa] text-neutral-900 antialiased;
+  }
+}
+
+.glass-card {
+  @apply bg-white/70 backdrop-blur-xl border border-white/20 shadow-[0_8px_32px_0_rgba(31,38,135,0.07)];
+}
+
+.travel-gradient {
+  background: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
+}
+
+.hero-pattern {
+  background-image: radial-gradient(#e5e7eb 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.journal-bg {
+  background-color: #fafafa;
+  background-image: 
+    linear-gradient(#f1f1f1 1px, transparent 1px),
+    linear-gradient(90deg, #f1f1f1 1px, transparent 1px);
+  background-size: 40px 40px;
+}
