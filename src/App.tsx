@@ -22,8 +22,14 @@ import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 import { cn } from './lib/utils';
 
-// Initialize Gemini
-const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+// Initialize Gemini - wrapped in a helper to prevent crashes if process is undefined
+const getApiKey = () => {
+  try {
+    return process.env.GEMINI_API_KEY || '';
+  } catch {
+    return '';
+  }
+};
 
 interface LandmarkInfo {
   name: string;
@@ -68,7 +74,6 @@ export default function App() {
         },
         (err) => {
           console.warn("Geolocation error:", err);
-          setError("Could not access your location. Please check your settings.");
         }
       );
     }
@@ -76,6 +81,11 @@ export default function App() {
 
   useEffect(() => {
     refreshLocation();
+    const key = getApiKey();
+    // Only set error if we are NOT in a development environment where keys might be injected differently
+    if (!key && window.location.hostname !== 'localhost' && !window.location.hostname.includes('run.app')) {
+      setError("API Key is missing. Please add GEMINI_API_KEY to your Vercel or Netlify Environment Variables and redeploy.");
+    }
   }, []);
 
   const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
@@ -101,14 +111,20 @@ export default function App() {
         return;
       }
       const reader = new FileReader();
-      reader.onloadend = () => {
+      reader.onload = () => {
         setImage(reader.result as string);
         setLandmark(null);
         setTripPlan(null);
         setDistance(null);
         setError(null);
       };
+      reader.onerror = () => {
+        setError("Failed to read the image file. Please try again.");
+      };
       reader.readAsDataURL(file);
+      
+      // Reset input value so the same file can be selected again
+      e.target.value = '';
     }
   };
 
@@ -116,11 +132,17 @@ export default function App() {
     if (!image) return;
     setAnalyzing(true);
     setError(null);
+    setLandmark(null);
+    setTripPlan(null);
+    setDistance(null);
 
     try {
-      if (!process.env.GEMINI_API_KEY) {
-        throw new Error("API Key is missing. Please check your configuration.");
+      const key = getApiKey();
+      if (!key) {
+        throw new Error("API Key is missing. Please add GEMINI_API_KEY to your Vercel or Netlify Environment Variables and redeploy.");
       }
+
+      const ai = new GoogleGenAI({ apiKey: key });
 
       // Extract base64 and mimeType from data URL
       const matches = image.match(/^data:(.+);base64,(.+)$/);
@@ -130,15 +152,16 @@ export default function App() {
       const mimeType = matches[1];
       const base64Data = matches[2];
       
-      const response = await genAI.models.generateContent({
+      const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: {
           parts: [
             { inlineData: { data: base64Data, mimeType: mimeType } },
-            { text: "Identify this landmark. If it is not a recognizable landmark or place, please state that in the description. Provide its name, location (city, country), a brief description, and its approximate latitude and longitude coordinates. Also, search for any major upcoming events or concerts happening near this location in the next few months. Return the data in JSON format." }
+            { text: "Identify this landmark or place. Provide its name, location (city, country), a brief description, and its approximate latitude and longitude coordinates. Also, use Google Search to find major upcoming events, festivals, or concerts happening near this location in the next 3-6 months. Return the data in valid JSON format according to the schema." }
           ]
         },
         config: {
+          tools: [{ googleSearch: {} }],
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.OBJECT,
@@ -164,7 +187,8 @@ export default function App() {
                   }
                 }
               }
-            }
+            },
+            required: ["name", "location", "description", "coordinates"]
           }
         }
       });
@@ -175,14 +199,16 @@ export default function App() {
 
       let data: LandmarkInfo;
       try {
-        data = JSON.parse(response.text) as LandmarkInfo;
+        // Clean the response text in case it's wrapped in markdown
+        const cleanedText = response.text.replace(/```json\n?|```/g, '').trim();
+        data = JSON.parse(cleanedText) as LandmarkInfo;
       } catch (e) {
         console.error("JSON Parse Error:", e, response.text);
         throw new Error("Failed to process the AI response. Please try again.");
       }
       
-      if (!data.name || data.name.toLowerCase().includes("unknown") || data.name.toLowerCase().includes("none")) {
-        setError("I couldn't identify this landmark. Please try a clearer photo of a famous place.");
+      if (!data.name || data.name.toLowerCase().includes("unknown") || data.name.toLowerCase().includes("none") || data.name.toLowerCase().includes("landmark")) {
+        setError("I couldn't identify this landmark clearly. Please try a clearer photo of a recognizable place.");
         setLandmark(null);
       } else {
         setLandmark(data);
@@ -202,19 +228,40 @@ export default function App() {
   const planTrip = async () => {
     if (!landmark) return;
     setPlanning(true);
+    setError(null);
 
     try {
-      const response = await genAI.models.generateContent({
-        model: "gemini-3.1-pro-preview",
-        contents: `Create a detailed ${duration}-day trip itinerary for ${landmark.name} in ${landmark.location}. 
-        The budget for this trip is ${budget} and the travel style should be ${style}. 
-        Include travel tips, best time to visit, and local food recommendations. Format with markdown.`,
+      const key = getApiKey();
+      if (!key) {
+        throw new Error("API Key is missing. Please check your configuration.");
+      }
+
+      const ai = new GoogleGenAI({ apiKey: key });
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: `Create a professional, detailed ${duration}-day trip itinerary for ${landmark.name} in ${landmark.location}. 
+        Budget: ${budget}. Travel Style: ${style}. 
+        Use Google Search to include:
+        1. Real-time opening hours and ticket prices for major attractions.
+        2. Current travel advisories or local tips.
+        3. Highly-rated local food recommendations.
+        4. A logical day-by-day breakdown.
+        Format the response with beautiful markdown, using headers, bullet points, and bold text for emphasis.`,
+        config: {
+          tools: [{ googleSearch: {} }]
+        }
       });
 
-      setTripPlan({ itinerary: response.text || '' });
-    } catch (err) {
-      console.error(err);
-      setError("Failed to generate trip plan.");
+      if (!response.text) {
+        throw new Error("The AI returned an empty response. Please try again.");
+      }
+
+      setTripPlan({ itinerary: response.text });
+    } catch (err: any) {
+      console.error("Trip Planning Error:", err);
+      const message = err?.message || "An unexpected error occurred.";
+      setError(`Trip planning failed: ${message}`);
     } finally {
       setPlanning(false);
     }
@@ -236,6 +283,30 @@ export default function App() {
     }, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  if (error && error.includes("API Key is missing")) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-neutral-50 p-6 text-center">
+        <div className="max-w-md glass-card p-8 rounded-3xl">
+          <Info className="w-12 h-12 text-indigo-600 mx-auto mb-4" />
+          <h1 className="text-2xl font-bold mb-2">Configuration Needed</h1>
+          <p className="text-neutral-600 mb-6">{error}</p>
+          <div className="text-sm text-neutral-500 bg-neutral-100 p-4 rounded-xl text-left font-mono">
+            <strong>For Vercel:</strong><br/>
+            1. Go to Vercel Dashboard<br/>
+            2. Settings &gt; Environment Variables<br/>
+            3. Add GEMINI_API_KEY<br/>
+            4. Redeploy your project<br/><br/>
+            <strong>For Netlify:</strong><br/>
+            1. Go to Netlify Dashboard<br/>
+            2. Site Settings &gt; Env Variables<br/>
+            3. Add GEMINI_API_KEY<br/>
+            4. Clear Cache and Deploy
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen journal-bg text-neutral-900 font-sans selection:bg-indigo-100">
@@ -291,24 +362,41 @@ export default function App() {
         </div>
 
         {/* Floating Distance Bar */}
-        {distance && (
-          <motion.div 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="absolute bottom-12 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-4"
-          >
-            <div className="glass-card px-6 py-3 rounded-full flex items-center gap-3 text-indigo-700 font-bold shadow-2xl">
-              <Navigation className="w-5 h-5 animate-pulse" />
-              <span>{distance} from your current location</span>
-            </div>
-            <button 
-              onClick={refreshLocation}
-              className="px-4 py-2 rounded-full bg-white/20 backdrop-blur-md border border-white/30 text-white text-xs font-bold uppercase tracking-widest hover:bg-white/30 transition-all"
+        <AnimatePresence>
+          {distance ? (
+            <motion.div 
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 20 }}
+              className="absolute bottom-12 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-4 w-full px-6"
             >
-              Update Location
-            </button>
-          </motion.div>
-        )}
+              <div className="glass-card px-6 py-3 rounded-full flex items-center gap-3 text-indigo-700 font-bold shadow-2xl whitespace-nowrap">
+                <Navigation className="w-5 h-5 animate-pulse" />
+                <span>{distance} from your current location</span>
+              </div>
+              <button 
+                onClick={refreshLocation}
+                className="px-4 py-2 rounded-full bg-white/20 backdrop-blur-md border border-white/30 text-white text-xs font-bold uppercase tracking-widest hover:bg-white/30 transition-all"
+              >
+                Update Location
+              </button>
+            </motion.div>
+          ) : landmark && !userLocation && (
+            <motion.div 
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="absolute bottom-12 left-1/2 -translate-x-1/2 z-30"
+            >
+              <button 
+                onClick={refreshLocation}
+                className="glass-card px-6 py-3 rounded-full flex items-center gap-3 text-indigo-700 font-bold shadow-2xl hover:bg-white transition-all"
+              >
+                <MapPin className="w-5 h-5" />
+                Enable Location to See Distance
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       <main className="max-w-6xl mx-auto px-6 -mt-24 relative z-40 pb-24 space-y-16">
@@ -319,7 +407,10 @@ export default function App() {
             className="glass-card p-4 rounded-[2.5rem] shadow-2xl bg-white/80"
           >
             <div 
-              onClick={() => fileInputRef.current?.click()}
+              onClick={(e) => {
+                e.preventDefault();
+                fileInputRef.current?.click();
+              }}
               className={cn(
                 "relative aspect-[16/10] rounded-[2rem] border-2 border-dashed border-neutral-200 bg-neutral-50/50 flex flex-col items-center justify-center cursor-pointer transition-all hover:border-indigo-400 hover:bg-indigo-50/30 group overflow-hidden",
                 image && "border-none shadow-inner"
@@ -345,14 +436,14 @@ export default function App() {
                   </div>
                 </div>
               )}
-              <input 
-                type="file" 
-                ref={fileInputRef} 
-                onChange={handleImageUpload} 
-                className="hidden" 
-                accept="image/*" 
-              />
             </div>
+            <input 
+              type="file" 
+              ref={fileInputRef} 
+              onChange={handleImageUpload} 
+              className="hidden" 
+              accept="image/*" 
+            />
 
             {image && !landmark && (
               <div className="mt-6 flex justify-center">
@@ -489,19 +580,22 @@ export default function App() {
                     <div className="space-y-6">
                       {landmark.events && landmark.events.length > 0 ? (
                         landmark.events.map((event, idx) => (
-                          <motion.div 
+                          <motion.a 
                             key={idx} 
+                            href={event.link}
+                            target="_blank"
+                            rel="noopener noreferrer"
                             initial={{ opacity: 0, x: 20 }}
                             animate={{ opacity: 1, x: 0 }}
                             transition={{ delay: idx * 0.1 }}
-                            className="group cursor-pointer p-4 rounded-2xl hover:bg-neutral-50 transition-all border border-transparent hover:border-neutral-100"
+                            className="block group p-4 rounded-2xl hover:bg-neutral-50 transition-all border border-transparent hover:border-neutral-100"
                           >
                             <div className="text-xs text-indigo-500 font-bold uppercase tracking-wider mb-2">{event.date}</div>
                             <div className="font-extrabold text-lg text-neutral-800 group-hover:text-indigo-600 transition-colors flex items-center justify-between gap-4">
                               <span className="line-clamp-2">{event.title}</span>
                               <ExternalLink className="w-5 h-5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-all translate-x-[-10px] group-hover:translate-x-0" />
                             </div>
-                          </motion.div>
+                          </motion.a>
                         ))
                       ) : (
                         <div className="flex flex-col items-center justify-center py-12 text-center space-y-4">
