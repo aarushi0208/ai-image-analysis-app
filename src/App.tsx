@@ -157,11 +157,10 @@ export default function App() {
         contents: {
           parts: [
             { inlineData: { data: base64Data, mimeType: mimeType } },
-            { text: "Identify this landmark or place. Provide its name, location (city, country), a brief description, and its approximate latitude and longitude coordinates. Also, use Google Search to find major upcoming events, festivals, or concerts happening near this location in the next 3-6 months. Return the data in valid JSON format according to the schema." }
+            { text: "Identify this landmark or place. Provide its name, location (city, country), a brief description, and its approximate latitude and longitude coordinates. Also, list 3-5 major annual events or festivals that typically happen near this location. Return the data in valid JSON format according to the schema." }
           ]
         },
         config: {
-          tools: [{ googleSearch: {} }],
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.OBJECT,
@@ -242,15 +241,12 @@ export default function App() {
         model: "gemini-3-flash-preview",
         contents: `Create a professional, detailed ${duration}-day trip itinerary for ${landmark.name} in ${landmark.location}. 
         Budget: ${budget}. Travel Style: ${style}. 
-        Use Google Search to include:
-        1. Real-time opening hours and ticket prices for major attractions.
-        2. Current travel advisories or local tips.
+        Include:
+        1. Popular attractions and their general ticket price ranges.
+        2. Local travel tips and cultural etiquette.
         3. Highly-rated local food recommendations.
         4. A logical day-by-day breakdown.
         Format the response with beautiful markdown, using headers, bullet points, and bold text for emphasis.`,
-        config: {
-          tools: [{ googleSearch: {} }]
-        }
       });
 
       if (!response.text) {
